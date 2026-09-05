@@ -1425,9 +1425,9 @@ HARD REJECTION — flag if ANY apply:
 6. Carousel with no narrative purpose
 7. App UI made of stacked cards instead of layout
 
-Be specific. Reference file:line for every finding." -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR_DESIGN"
+Be specific. Reference file:line for every finding." -C "$_REPO_ROOT" -s read-only -c 'model="gpt-6-astra"' -c 'model_reasoning_effort="max"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR_DESIGN"
 ```
-Use a 5-minute timeout (`timeout: 300000`). After the command completes, read stderr:
+Use a 20-minute timeout (`timeout: 1200000`) — this voice runs at `max` reasoning, which is far slower than the `high`/`medium` it used before. After the command completes, read stderr:
 ```bash
 cat "$TMPERR_DESIGN" && rm -f "$TMPERR_DESIGN"
 ```
@@ -1444,7 +1444,7 @@ For each finding: what's wrong, severity (critical/high/medium), and the file:li
 
 **Error handling (all non-blocking):**
 - **Auth failure:** If stderr contains "auth", "login", "unauthorized", or "API key": "Codex authentication failed. Run `codex login` to authenticate."
-- **Timeout:** "Codex timed out after 5 minutes."
+- **Timeout:** "Codex timed out after 20 minutes."
 - **Empty response:** "Codex returned no response."
 - On any Codex error: proceed with Claude subagent output only, tagged `[single-model]`.
 - If Claude subagent also fails: "Outside voices unavailable — continuing with primary review."

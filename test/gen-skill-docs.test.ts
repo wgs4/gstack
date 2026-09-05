@@ -2,6 +2,7 @@ import { describe, test, expect, afterAll } from 'bun:test';
 import { assertSinglePreamble } from '../scripts/gen-skill-docs';
 import { COMMAND_DESCRIPTIONS } from '../browse/src/commands';
 import { SNAPSHOT_FLAGS } from '../browse/src/snapshot';
+import { CODEX_MODEL, CODEX_DESIGN_EFFORT } from '../scripts/resolvers/constants';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -1751,10 +1752,23 @@ describe('DESIGN_OUTSIDE_VOICES resolver', () => {
   test('branches correctly per skillName — different prompts', () => {
     const planContent = readSkillUnion('plan-design-review');
     const consultContent = fs.readFileSync(path.join(ROOT, 'design-consultation', 'SKILL.md'), 'utf-8');
-    // plan-design-review uses analytical prompt (high reasoning)
-    expect(planContent).toContain('model_reasoning_effort="high"');
-    // design-consultation uses creative prompt (medium reasoning)
-    expect(consultContent).toContain('model_reasoning_effort="medium"');
+    // The branch is the PROMPT, which is what this test's name claims and what
+    // actually differs: plan-design-review evaluates a plan file analytically;
+    // design-consultation asks for an opinionated creative direction.
+    //
+    // This used to assert the reasoning effort instead (high vs medium). That
+    // split no longer exists — both voices run at CODEX_DESIGN_EFFORT — and
+    // asserting it here meant a deliberate tuning change read as a branching
+    // regression. Effort is covered by the shared-pin assertion below.
+    expect(planContent).toContain('Read the plan file at');
+    expect(consultContent).toContain('This is YOUR design direction');
+    expect(planContent).not.toContain('This is YOUR design direction');
+
+    // Both design voices share the pinned model and reasoning dial.
+    for (const content of [planContent, consultContent]) {
+      expect(content).toContain(`-c 'model="${CODEX_MODEL}"'`);
+      expect(content).toContain(`model_reasoning_effort="${CODEX_DESIGN_EFFORT}"`);
+    }
   });
 });
 

@@ -14,7 +14,7 @@
  */
 import type { TemplateContext } from './types';
 import { generateInvokeSkill } from './composition';
-import { codexPreflight, codexErrorHandling, CODEX_WEB_SEARCH_FLAG } from './constants';
+import { codexPreflight, codexErrorHandling, CODEX_WEB_SEARCH_FLAG, CODEX_REVIEW_MODEL_FLAGS, CODEX_REVIEWER_MODEL, CODEX_REVIEWER_EFFORT, codexReviewModelAssert } from './constants';
 import { DESIGN_DOC_DISCOVERY_BLOCK } from './design-doc-discovery';
 import { getHostConfig } from '../../hosts/index';
 
@@ -333,7 +333,7 @@ command -v codex >/dev/null 2>&1 && echo "CODEX_AVAILABLE" || echo "CODEX_NOT_AV
 
 Use AskUserQuestion (regardless of codex availability):
 
-> Want a second opinion from an independent AI perspective? It will review your problem statement, key answers, premises, and any landscape findings from this session without having seen this conversation — it gets a structured summary. Usually takes 2-5 minutes.
+> Want a second opinion from an independent AI perspective? It will review your problem statement, key answers, premises, and any landscape findings from this session without having seen this conversation — it gets a structured summary. Usually takes 5-15 minutes (the reviewer runs at \`max\` reasoning).
 > A) Yes, get a second opinion
 > B) No, proceed to alternatives
 
@@ -368,10 +368,10 @@ Then add the context block and mode-appropriate instructions:
 \`\`\`bash
 TMPERR_OH=$(mktemp /tmp/codex-oh-err-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "$(cat "$CODEX_PROMPT_FILE")" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_OH"
+codex exec "$(cat "$CODEX_PROMPT_FILE")" -C "$_REPO_ROOT" -s read-only ${CODEX_REVIEW_MODEL_FLAGS} ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_OH"
 \`\`\`
 
-Use a 5-minute timeout (\`timeout: 300000\`). After the command completes, read stderr:
+Use a 20-minute timeout (\`timeout: 1200000\`) — the reviewer runs at \`max\` reasoning, which is far slower than the \`high\` this path used to use. After the command completes, read stderr:
 \`\`\`bash
 cat "$TMPERR_OH"
 rm -f "$TMPERR_OH" "$CODEX_PROMPT_FILE"
@@ -379,7 +379,7 @@ rm -f "$TMPERR_OH" "$CODEX_PROMPT_FILE"
 
 **Error handling:** All errors are non-blocking — second opinion is a quality enhancement, not a prerequisite.
 - **Auth failure:** If stderr contains "auth", "login", "unauthorized", or "API key": "Codex authentication failed. Run \\\`codex login\\\` to authenticate." Fall back to Claude subagent.
-- **Timeout:** "Codex timed out after 5 minutes." Fall back to Claude subagent.
+- **Timeout:** "Codex timed out after 20 minutes." Fall back to Claude subagent.
 - **Empty response:** "Codex returned no response." Fall back to Claude subagent.
 
 On any Codex error, fall back to the Claude subagent below.
@@ -532,10 +532,10 @@ _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo"
 # here. It defines _gstack_codex_timeout_wrapper (gtimeout -> timeout ->
 # unwrapped fallback), added in #1056 but never wired into this call site.
 source ~/.claude/skills/gstack/bin/gstack-codex-probe 2>/dev/null || true
-_gstack_codex_timeout_wrapper 540 codex exec "${CODEX_BOUNDARY}Review the changes on this branch against the base branch. Run DIFF_BASE=$(git merge-base origin/<base> HEAD) && git diff "$DIFF_BASE" to see the diff. Your job is to find ways this code will fail in production. Think like an attacker and a chaos engineer. Find edge cases, race conditions, security holes, resource leaks, failure modes, and silent data corruption paths. Be adversarial. Be thorough. No compliments — just the problems. End your output with ONE line in the canonical format \`Recommendation: <action> because <one-line reason naming the most exploitable finding>\`. Generic reasons like 'because it's safer' do not qualify; the reason must point to a specific finding or no-fix rationale." -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_ADV"
+_gstack_codex_timeout_wrapper 1200 codex exec "${CODEX_BOUNDARY}Review the changes on this branch against the base branch. Run DIFF_BASE=$(git merge-base origin/<base> HEAD) && git diff "$DIFF_BASE" to see the diff. Your job is to find ways this code will fail in production. Think like an attacker and a chaos engineer. Find edge cases, race conditions, security holes, resource leaks, failure modes, and silent data corruption paths. Be adversarial. Be thorough. No compliments — just the problems. End your output with ONE line in the canonical format \`Recommendation: <action> because <one-line reason naming the most exploitable finding>\`. Generic reasons like 'because it's safer' do not qualify; the reason must point to a specific finding or no-fix rationale." -C "$_REPO_ROOT" -s read-only ${CODEX_REVIEW_MODEL_FLAGS} ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_ADV"
 \`\`\`
 
-Set the Bash tool's \`timeout\` parameter to \`600000\` (10 minutes). It sits ABOVE the 540s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves \`gtimeout\`, then \`timeout\`, then runs unwrapped, so it is safe on a macOS without coreutils. After the command completes, read stderr:
+Set the Bash tool's \`timeout\` parameter to \`1260000\` (21 minutes). It sits ABOVE the 1200s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves \`gtimeout\`, then \`timeout\`, then runs unwrapped, so it is safe on a macOS without coreutils. After the command completes, read stderr:
 \`\`\`bash
 cat "$TMPERR_ADV"
 \`\`\`
@@ -544,7 +544,7 @@ Present the full output verbatim. This is informational — it never blocks ship
 
 **Error handling:** All errors are non-blocking — adversarial review is a quality enhancement, not a prerequisite.
 - **Auth failure:** If stderr contains "auth", "login", "unauthorized", or "API key": "Codex authentication failed. Run \\\`codex login\\\` to authenticate."
-- **Timeout (exit 124):** "Codex exceeded 9 minutes and was terminated; this pass produced NO findings." A timed-out pass is MISSING COVERAGE, not a clean bill — say so explicitly rather than continuing as if Codex had reviewed. Whatever it produced before the cut is recoverable from that run's rollout log under \`~/.codex/sessions/<YYYY>/<MM>/<DD>/\`.
+- **Timeout (exit 124):** "Codex exceeded 20 minutes and was terminated; this pass produced NO findings." A timed-out pass is MISSING COVERAGE, not a clean bill — say so explicitly rather than continuing as if Codex had reviewed. Whatever it produced before the cut is recoverable from that run's rollout log under \`~/.codex/sessions/<YYYY>/<MM>/<DD>/\`.
 - **Empty response:** "Codex returned no response. Stderr: <paste relevant error>."
 
 **Cleanup:** Run \`rm -f "$TMPERR_ADV"\` after processing.
@@ -565,12 +565,16 @@ cd "$_REPO_ROOT"
 # here. It defines _gstack_codex_timeout_wrapper (gtimeout -> timeout ->
 # unwrapped fallback), added in #1056 but never wired into this call site.
 source ~/.claude/skills/gstack/bin/gstack-codex-probe 2>/dev/null || true
-_gstack_codex_timeout_wrapper 540 codex review --base <base> -c 'model_reasoning_effort="high"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR"
+_gstack_codex_timeout_wrapper 1200 codex review --base <base> ${CODEX_REVIEW_MODEL_FLAGS} ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR"
 \`\`\`
 
 **No prompt argument.** \`--base\` is what scopes the review, and the positional \`[PROMPT]\` is mutually exclusive with it — passing both fails at argv parsing. Do NOT "fix" that error by dropping \`--base\` and keeping the prompt: a prompt-only \`codex review\` silently falls back to the **uncommitted working-tree** scope (\`git status --short; git diff\`), so it reviews the wrong changes and reports "no changes" on a clean tree. Prompt text describing the diff range does not change what the CLI feeds the reviewer. Unlike the adversarial pass above, which uses \`codex exec\` and really does run the git command it's told to, this path gets a pre-computed diff from the CLI — which is also why it needs no filesystem boundary.
 
-Set the Bash tool's \`timeout\` parameter to \`600000\` (10 minutes). It sits ABOVE the 540s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves \`gtimeout\`, then \`timeout\`, then runs unwrapped, so it is safe on a macOS without coreutils. Present output under \`CODEX SAYS (code review):\` header.
+Set the Bash tool's \`timeout\` parameter to \`1260000\` (21 minutes). It sits ABOVE the 1200s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves \`gtimeout\`, then \`timeout\`, then runs unwrapped, so it is safe on a macOS without coreutils.
+
+${codexReviewModelAssert('TMPERR')}
+
+Only once \`CODEX_MODEL_GATE\` is \`ok\` or \`unconfirmed\` does the review below count. Present output under \`CODEX SAYS (code review):\` header, with the \`CODEX_REQUESTED\` / \`CODEX_CONFIRMED\` line shown directly beneath it.
 Check for \`[P1]\` markers: found → \`GATE: FAIL\`, not found → \`GATE: PASS\`.
 
 If GATE is FAIL, use AskUserQuestion:
@@ -666,13 +670,17 @@ THE PLAN:
 \`\`\`bash
 TMPERR_PV=$(mktemp /tmp/codex-planreview-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_PV"
+codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only ${CODEX_REVIEW_MODEL_FLAGS} ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_PV"
 \`\`\`
 
-Use a 5-minute timeout (\`timeout: 300000\`). After the command completes, read stderr:
+Use a 20-minute timeout (\`timeout: 1200000\`) — the reviewer runs at \`max\` reasoning, which is far slower than the \`high\` this path used to use. After the command completes, read stderr:
 \`\`\`bash
 cat "$TMPERR_PV"
 \`\`\`
+
+${codexReviewModelAssert('TMPERR_PV')}
+
+If \`CODEX_MODEL_GATE\` is \`access_error\` or \`mismatch\`, report that configuration error instead of the review — never present it as a completed plan review.
 
 Present the full output verbatim:
 
@@ -685,7 +693,7 @@ CODEX SAYS (plan review — outside voice):
 
 **Error handling:** All errors are non-blocking — the outside voice is informational.
 - Auth failure (stderr contains "auth", "login", "unauthorized"): "Codex auth failed. Run \\\`codex login\\\` to authenticate." Fall back to the Claude subagent below.
-- Timeout: "Codex timed out after 5 minutes." Fall back to the Claude subagent below.
+- Timeout: "Codex timed out after 20 minutes." Fall back to the Claude subagent below.
 - Empty response: "Codex returned no response." Fall back to the Claude subagent below.
 
 **If \`CODEX_MODE: not_installed\` or \`not_authed\` (or Codex errored at runtime):**
@@ -801,10 +809,10 @@ THE DOCS AND DIFF: <list the touched doc paths>"
 \`\`\`bash
 TMPERR_DOC=$(mktemp /tmp/codex-docreview-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_DOC"
+codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only ${CODEX_REVIEW_MODEL_FLAGS} ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_DOC"
 \`\`\`
 
-Use a 5-minute timeout (\`timeout: 300000\`). After the command completes, read stderr:
+Use a 20-minute timeout (\`timeout: 1200000\`) — the reviewer runs at \`max\` reasoning, which is far slower than the \`high\` this path used to use. After the command completes, read stderr:
 \`\`\`bash
 cat "$TMPERR_DOC"
 \`\`\`
