@@ -165,10 +165,12 @@ above); never read the other two mode sections.
 
 **Reasoning effort override:** If the user's input contains `--xhigh` anywhere,
 note it and remove it from the prompt text before passing to Codex. When `--xhigh`
-is present, use `model_reasoning_effort="xhigh"` for all modes regardless of the
-per-mode default below. Otherwise, use the per-mode defaults:
-- Review (2A): `high` — bounded diff input, needs thoroughness
-- Challenge (2B): `high` — adversarial but bounded by diff
+is present, use `model_reasoning_effort="xhigh"` for all modes, overriding the
+per-mode default below. Note that on the pinned review paths this is a *step down*
+from the `max` default — tell the user so, since `--xhigh` reads like an upgrade.
+Otherwise, use the per-mode defaults:
+- Review (2A): `max` — pinned reviewer, quality first
+- Challenge (2B): `max` — pinned reviewer, adversarial depth
 - Consult (2C): `medium` — large context, interactive, needs speed
 
 ---
@@ -224,19 +226,55 @@ examples.
 
 ## Model & Reasoning
 
-**Model:** No model is hardcoded — codex uses whatever its current default is (the frontier
-agentic coding model). This means as OpenAI ships newer models, /codex automatically
-uses them. If the user wants a specific model, pass it through — but the flag differs
-by mode (see below).
+**Model (review paths are PINNED — WGS fork):** Review, Challenge, and the
+custom-instructions Review path all pin the reviewer explicitly via the
+`{{CODEX_REVIEW_MODEL_FLAGS}}` token, whose single source of truth is
+`scripts/resolvers/constants.ts`. Today that resolves to:
+
+```
+-c 'model="gpt-6-astra"' -c 'review_model="gpt-6-astra"' -c 'model_reasoning_effort="max"'
+```
+
+Upstream gstack hardcodes no model, so /codex inherits the `model = ` line in
+`~/.codex/config.toml`. For a *reviewer* that is a bug, not a feature: the point of the
+Codex pass is an independent, maximum-quality outside read, and inheriting the config
+default silently downgrades it to whatever was last pinned there. The pin is explicit so
+it cannot drift.
+
+`review_model` is pinned alongside `model` deliberately. It is a real config key in
+codex-cli 0.153.4, but setting it alone does NOT switch the reviewer (verified: the
+session header still reported the `model` value). It is pinned defensively so a
+`review_model = ` line landing in `config.toml` later cannot silently select an older
+reviewer behind the skill's back.
+
+**Consult mode is NOT pinned.** It keeps the inherited default and `medium` effort — it
+is an interactive advice path where speed matters, not a reviewer.
+
+If the user asks for a different model, their request wins — pass it through (see the
+flag-shape note below).
 
 **Reasoning effort (per-mode defaults):**
-- **Review (2A):** `high` — bounded diff input, needs thoroughness but not max tokens
-- **Challenge (2B):** `high` — adversarial but bounded by diff size
-- **Consult (2C):** `medium` — large context (plans, codebase), interactive, needs speed
+- **Review (2A):** `max` — pinned; review quality is the priority
+- **Challenge (2B):** `max` — pinned; adversarial depth is the whole job
+- **Consult (2C):** `medium` — large context, interactive, needs speed (unpinned)
 
-`xhigh` uses ~23x more tokens than `high` and causes 50+ minute hangs on large context
-tasks (OpenAI issues #8545, #8402, #6931). Users can override with `--xhigh` flag
-(e.g., `/codex review --xhigh`) when they want maximum reasoning and are willing to wait.
+**Why `max` and not `ultra`.** `codex debug models` lists six levels for `gpt-6-astra`:
+low, medium, high, xhigh, max, ultra. `max` is "Maximum reasoning depth for the hardest
+problems". `ultra` is "Maximum reasoning **with automatic task delegation**" — it is not
+simply more thinking, it lets the model spawn delegated sub-tasks. That breaks the
+bounded, read-only, single-shot contract every review path here depends on (one timeout
+wrapper, one captured stderr, one verdict). `max` is the deepest reasoning that stays
+bounded. Do not "upgrade" these pins to `ultra` without redesigning the timeout and
+capture story.
+
+**Cost and time.** `max` is far slower and more expensive than the `high` these paths
+used before (`xhigh` alone is ~23x `high`; OpenAI issues #8545, #8402, #6931). That is a
+deliberate trade for review quality. Every wrapper was widened to 1200s with a 1260000ms
+Bash gate above it, so execution stays bounded and a stall still surfaces as a
+diagnosable exit 124 rather than a silent harness kill.
+
+The `--xhigh` flag still works as a user override and now means *less* reasoning than the
+default, not more.
 
 **Web search:** All codex commands pass `{{CODEX_WEB_SEARCH_FLAG}}` so `codex exec`
 invocations can look up docs and APIs during review. This is OpenAI's cached index —
@@ -292,12 +330,22 @@ If token count is not available, display: `Tokens: unknown`
   missing or wrong. A prompt-only `codex review` defaults to uncommitted changes, so a
   clean working tree reads as an empty review even when `<base>...HEAD` is large. Confirm
   `--base <base>` is actually on the command line.
-- **Model not supported (HTTP 400):** stderr shows
-  `The '<model>' model is not supported when using Codex with a ChatGPT account`
-  (a `status: 400` / `invalid_request_error` naming a model). This is an
-  entitlement/stale-pin problem, not an auth or network failure, and the auth probe
-  cannot catch it. The rejected model comes from the `model = "..."` line in
-  `~/.codex/config.toml`. Recovery, in order:
+- **Reviewer model refused (HTTP 400):** stderr shows a `status: 400` /
+  `invalid_request_error` naming a model. Two distinct causes:
+  1. `The '<model>' model requires a newer version of Codex` — the CLI is too old for
+     the pinned reviewer. Fix: `npm install -g @openai/codex`. (This is exactly what
+     `gpt-6-astra` returned on codex-cli 0.145.0; it needs >= 0.153.4.)
+  2. `The '<model>' model is not supported when using Codex with a ChatGPT account` —
+     an entitlement problem for this account.
+
+  Either way this is a **configuration/access failure, not a review**. Report it as
+  such. Do NOT present it as a passing or failing review, and do NOT silently retry
+  with a different model — a review that quietly ran on an older model is worse than
+  no review, because it looks like coverage that never happened. If the user wants a
+  fallback model, they ask for it explicitly.
+
+  For a model coming from the `model = "..."` line in `~/.codex/config.toml` rather
+  than the skill's pin, recovery is, in order:
   1. Read `~/.codex/config.toml` and check the `[notice.model_migrations]` table —
      Codex records the intended replacement there (e.g. `"gpt-5.4" = "gpt-5.5"`).
   2. Retry with the replacement model explicitly: exec-based modes (Challenge,
@@ -310,6 +358,34 @@ If token count is not available, display: `Tokens: unknown`
 - **Empty response:** If `$TMPRESP` is empty or doesn't exist, tell the user:
   "Codex returned no response. Check stderr for errors."
 - **Session resume failure:** If resume fails, delete the session file and start fresh.
+
+---
+
+## Reviewer identity in the result (REQUIRED — review paths)
+
+Codex prints its session header to **stderr**, which every review path already captures
+to `$TMPERR`. Two lines matter:
+
+```bash
+grep -m1 '^model:' "$TMPERR"; grep -m1 '^reasoning effort:' "$TMPERR"
+```
+
+Print one line directly under the `CODEX SAYS` header, distinguishing what was
+**requested** (the pin) from what was **confirmed** (the header the CLI actually
+reported):
+
+```
+Reviewer: requested gpt-6-astra / max — confirmed gpt-6-astra / max
+```
+
+Rules:
+- If the confirmed model does NOT match the requested model, something overrode the pin.
+  Report a configuration error naming both models. Do not present the findings as a
+  `gpt-6-astra` review.
+- If no header was captured, write `confirmed unknown` — never assume the pin took.
+  Requested is not confirmed.
+- If stderr carries a model 400, follow the Error Handling entry above: that is an
+  access error, not a review.
 
 ---
 

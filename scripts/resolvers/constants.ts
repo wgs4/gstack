@@ -65,6 +65,98 @@ export const OPENAI_LITMUS_CHECKS = [
 export const CODEX_WEB_SEARCH_FLAG = `-c 'web_search="cached"'`;
 
 /**
+ * Reviewer model + reasoning pin for every Codex REVIEW path.
+ *
+ * WGS customization (fork wgs4/gstack). Upstream gstack deliberately pins no
+ * model so /codex inherits whatever `model = ` sits in ~/.codex/config.toml.
+ * That is wrong for a reviewer: the whole point of the Codex pass is an
+ * independent, maximum-quality outside read, and inheriting the config default
+ * silently downgrades it to whatever the last person pinned (here:
+ * gpt-5.6-sol). Review quality is the priority, so the reviewer model is
+ * explicit and does not drift.
+ *
+ * Why all three flags:
+ *   - `model`        — the lever that actually works. Verified on codex-cli
+ *                      0.153.4: `codex review` has NO -m/--model flag (its
+ *                      --help lists none), so -c is the only route, and the
+ *                      session header confirms `model: gpt-6-astra`.
+ *   - `review_model` — a REAL config key in 0.153.4 (it is in the config
+ *                      struct; --strict-config accepts it while rejecting a
+ *                      bogus key). Passing it alone did NOT switch the
+ *                      reviewer — the header still read gpt-5.6-sol — so it is
+ *                      pinned here defensively: if a `review_model = ` line
+ *                      ever lands in config.toml it cannot silently select an
+ *                      older reviewer behind our back.
+ *   - `model_reasoning_effort` — see below.
+ *
+ * Why `max` and not `ultra`: the 0.153.4 catalog (`codex debug models`) lists
+ * six levels for gpt-6-astra — low, medium, high, xhigh, max, ultra. `max` is
+ * described as "Maximum reasoning depth for the hardest problems"; `ultra` is
+ * "Maximum reasoning with automatic task delegation". `ultra` is therefore not
+ * simply more thinking — it lets the model spawn delegated sub-tasks, which
+ * breaks the bounded, read-only, single-shot contract every review path here
+ * depends on (fixed timeout wrapper, one captured stderr, one verdict). `max`
+ * is the deepest reasoning that stays bounded.
+ *
+ * ONE source of truth: resolvers interpolate this directly; templates use the
+ * {{CODEX_REVIEW_MODEL_FLAGS}} token. Never write these flags inline.
+ *
+ * Applies to REVIEW paths only. Consult mode and the design reviewers keep
+ * their own tuning (speed-sensitive / different job) — see CODEX_REVIEWER_*.
+ */
+export const CODEX_REVIEWER_MODEL = 'gpt-6-astra';
+export const CODEX_REVIEWER_EFFORT = 'max';
+export const CODEX_REVIEW_MODEL_FLAGS =
+  `-c 'model="${CODEX_REVIEWER_MODEL}"' -c 'review_model="${CODEX_REVIEWER_MODEL}"' -c 'model_reasoning_effort="${CODEX_REVIEWER_EFFORT}"'`;
+
+/**
+ * Fail-closed check that the reviewer we ASKED for is the reviewer that RAN.
+ *
+ * codex prints its session header (`model:`, `reasoning effort:`) to STDERR,
+ * which every review path already captures to $TMPERR. Requested != confirmed:
+ * a stale CLI, a revoked entitlement, or a config override can all yield a
+ * successful-looking review from a different, older model. Comparing the
+ * header against the pin turns that into a loud configuration error instead of
+ * a silent downgrade.
+ *
+ * `errVar` is the shell var holding the stderr capture path.
+ */
+export function codexReviewModelAssert(errVar: string): string {
+  return `\`\`\`bash
+# Confirm the reviewer that actually ran is the one we pinned (requested vs confirmed).
+_CODEX_EFF_MODEL=$(grep -m1 '^model:' "$${errVar}" 2>/dev/null | sed 's/^model:[[:space:]]*//')
+_CODEX_EFF_EFFORT=$(grep -m1 '^reasoning effort:' "$${errVar}" 2>/dev/null | sed 's/^reasoning effort:[[:space:]]*//')
+echo "CODEX_REQUESTED: ${CODEX_REVIEWER_MODEL} / ${CODEX_REVIEWER_EFFORT}"
+echo "CODEX_CONFIRMED: \${_CODEX_EFF_MODEL:-unknown} / \${_CODEX_EFF_EFFORT:-unknown}"
+if grep -qiE '"status":[[:space:]]*400|requires a newer version of Codex|model.{0,40}is not supported' "$${errVar}" 2>/dev/null; then
+  echo "CODEX_MODEL_GATE: access_error"
+elif [ -z "$_CODEX_EFF_MODEL" ]; then
+  echo "CODEX_MODEL_GATE: unconfirmed"
+elif [ "$_CODEX_EFF_MODEL" != "${CODEX_REVIEWER_MODEL}" ]; then
+  echo "CODEX_MODEL_GATE: mismatch"
+else
+  echo "CODEX_MODEL_GATE: ok"
+fi
+\`\`\`
+
+Branch on \`CODEX_MODEL_GATE\`:
+- **\`ok\`** — the pinned reviewer ran. Present the findings, and include the
+  \`CODEX_REQUESTED\` / \`CODEX_CONFIRMED\` line in the review output so the model
+  and reasoning level are visible in the result.
+- **\`access_error\`** — \`${CODEX_REVIEWER_MODEL}\` was refused (HTTP 400, entitlement, or a
+  CLI too old — the message "requires a newer version of Codex" means upgrade:
+  \`npm install -g @openai/codex\`). This is a configuration/access failure, NOT a
+  review. Do NOT present it as a passing or failing review, and do NOT silently
+  retry with another model. Report the error and the one-line fix.
+- **\`mismatch\`** — a different model answered than the one pinned (something
+  overrode us). Report it as a configuration error naming both models; do not
+  present the findings as an \`${CODEX_REVIEWER_MODEL}\` review.
+- **\`unconfirmed\`** — no header captured (wrapper swallowed stderr). Present the
+  findings but label the model line "requested ${CODEX_REVIEWER_MODEL} / ${CODEX_REVIEWER_EFFORT} (unconfirmed)".
+`;
+}
+
+/**
  * Shared Codex error handling block for resolver output.
  * Used by ADVERSARIAL_STEP, CODEX_PLAN_REVIEW, CODEX_SECOND_OPINION,
  * DESIGN_OUTSIDE_VOICES, DESIGN_REVIEW_LITE, DESIGN_SKETCH.

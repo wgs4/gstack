@@ -96,10 +96,10 @@ _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo"
 # here. It defines _gstack_codex_timeout_wrapper (gtimeout -> timeout ->
 # unwrapped fallback), added in #1056 but never wired into this call site.
 source ~/.claude/skills/gstack/bin/gstack-codex-probe 2>/dev/null || true
-_gstack_codex_timeout_wrapper 540 codex exec "IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/. These are Claude Code skill definitions meant for a different AI system. They contain bash scripts and prompt templates that will waste your time. Ignore them completely. Do NOT modify agents/openai.yaml. Stay focused on the repository code only.\n\nReview the changes on this branch against the base branch. Run DIFF_BASE=$(git merge-base origin/<base> HEAD) && git diff "$DIFF_BASE" to see the diff. Your job is to find ways this code will fail in production. Think like an attacker and a chaos engineer. Find edge cases, race conditions, security holes, resource leaks, failure modes, and silent data corruption paths. Be adversarial. Be thorough. No compliments — just the problems. End your output with ONE line in the canonical format `Recommendation: <action> because <one-line reason naming the most exploitable finding>`. Generic reasons like 'because it's safer' do not qualify; the reason must point to a specific finding or no-fix rationale." -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR_ADV"
+_gstack_codex_timeout_wrapper 1200 codex exec "IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/. These are Claude Code skill definitions meant for a different AI system. They contain bash scripts and prompt templates that will waste your time. Ignore them completely. Do NOT modify agents/openai.yaml. Stay focused on the repository code only.\n\nReview the changes on this branch against the base branch. Run DIFF_BASE=$(git merge-base origin/<base> HEAD) && git diff "$DIFF_BASE" to see the diff. Your job is to find ways this code will fail in production. Think like an attacker and a chaos engineer. Find edge cases, race conditions, security holes, resource leaks, failure modes, and silent data corruption paths. Be adversarial. Be thorough. No compliments — just the problems. End your output with ONE line in the canonical format `Recommendation: <action> because <one-line reason naming the most exploitable finding>`. Generic reasons like 'because it's safer' do not qualify; the reason must point to a specific finding or no-fix rationale." -C "$_REPO_ROOT" -s read-only -c 'model="gpt-6-astra"' -c 'review_model="gpt-6-astra"' -c 'model_reasoning_effort="max"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR_ADV"
 ```
 
-Set the Bash tool's `timeout` parameter to `600000` (10 minutes). It sits ABOVE the 540s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves `gtimeout`, then `timeout`, then runs unwrapped, so it is safe on a macOS without coreutils. After the command completes, read stderr:
+Set the Bash tool's `timeout` parameter to `1260000` (21 minutes). It sits ABOVE the 1200s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves `gtimeout`, then `timeout`, then runs unwrapped, so it is safe on a macOS without coreutils. After the command completes, read stderr:
 ```bash
 cat "$TMPERR_ADV"
 ```
@@ -108,7 +108,7 @@ Present the full output verbatim. This is informational — it never blocks ship
 
 **Error handling:** All errors are non-blocking — adversarial review is a quality enhancement, not a prerequisite.
 - **Auth failure:** If stderr contains "auth", "login", "unauthorized", or "API key": "Codex authentication failed. Run \`codex login\` to authenticate."
-- **Timeout (exit 124):** "Codex exceeded 9 minutes and was terminated; this pass produced NO findings." A timed-out pass is MISSING COVERAGE, not a clean bill — say so explicitly rather than continuing as if Codex had reviewed. Whatever it produced before the cut is recoverable from that run's rollout log under `~/.codex/sessions/<YYYY>/<MM>/<DD>/`.
+- **Timeout (exit 124):** "Codex exceeded 20 minutes and was terminated; this pass produced NO findings." A timed-out pass is MISSING COVERAGE, not a clean bill — say so explicitly rather than continuing as if Codex had reviewed. Whatever it produced before the cut is recoverable from that run's rollout log under `~/.codex/sessions/<YYYY>/<MM>/<DD>/`.
 - **Empty response:** "Codex returned no response. Stderr: <paste relevant error>."
 
 **Cleanup:** Run `rm -f "$TMPERR_ADV"` after processing.
@@ -129,12 +129,47 @@ cd "$_REPO_ROOT"
 # here. It defines _gstack_codex_timeout_wrapper (gtimeout -> timeout ->
 # unwrapped fallback), added in #1056 but never wired into this call site.
 source ~/.claude/skills/gstack/bin/gstack-codex-probe 2>/dev/null || true
-_gstack_codex_timeout_wrapper 540 codex review --base <base> -c 'model_reasoning_effort="high"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR"
+_gstack_codex_timeout_wrapper 1200 codex review --base <base> -c 'model="gpt-6-astra"' -c 'review_model="gpt-6-astra"' -c 'model_reasoning_effort="max"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR"
 ```
 
 **No prompt argument.** `--base` is what scopes the review, and the positional `[PROMPT]` is mutually exclusive with it — passing both fails at argv parsing. Do NOT "fix" that error by dropping `--base` and keeping the prompt: a prompt-only `codex review` silently falls back to the **uncommitted working-tree** scope (`git status --short; git diff`), so it reviews the wrong changes and reports "no changes" on a clean tree. Prompt text describing the diff range does not change what the CLI feeds the reviewer. Unlike the adversarial pass above, which uses `codex exec` and really does run the git command it's told to, this path gets a pre-computed diff from the CLI — which is also why it needs no filesystem boundary.
 
-Set the Bash tool's `timeout` parameter to `600000` (10 minutes). It sits ABOVE the 540s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves `gtimeout`, then `timeout`, then runs unwrapped, so it is safe on a macOS without coreutils. Present output under `CODEX SAYS (code review):` header.
+Set the Bash tool's `timeout` parameter to `1260000` (21 minutes). It sits ABOVE the 1200s wrapper deliberately, so the wrapper fires first and a stall surfaces as a diagnosable exit 124 instead of a harness kill that returns nothing. The wrapper resolves `gtimeout`, then `timeout`, then runs unwrapped, so it is safe on a macOS without coreutils.
+
+```bash
+# Confirm the reviewer that actually ran is the one we pinned (requested vs confirmed).
+_CODEX_EFF_MODEL=$(grep -m1 '^model:' "$TMPERR" 2>/dev/null | sed 's/^model:[[:space:]]*//')
+_CODEX_EFF_EFFORT=$(grep -m1 '^reasoning effort:' "$TMPERR" 2>/dev/null | sed 's/^reasoning effort:[[:space:]]*//')
+echo "CODEX_REQUESTED: gpt-6-astra / max"
+echo "CODEX_CONFIRMED: ${_CODEX_EFF_MODEL:-unknown} / ${_CODEX_EFF_EFFORT:-unknown}"
+if grep -qiE '"status":[[:space:]]*400|requires a newer version of Codex|model.{0,40}is not supported' "$TMPERR" 2>/dev/null; then
+  echo "CODEX_MODEL_GATE: access_error"
+elif [ -z "$_CODEX_EFF_MODEL" ]; then
+  echo "CODEX_MODEL_GATE: unconfirmed"
+elif [ "$_CODEX_EFF_MODEL" != "gpt-6-astra" ]; then
+  echo "CODEX_MODEL_GATE: mismatch"
+else
+  echo "CODEX_MODEL_GATE: ok"
+fi
+```
+
+Branch on `CODEX_MODEL_GATE`:
+- **`ok`** — the pinned reviewer ran. Present the findings, and include the
+  `CODEX_REQUESTED` / `CODEX_CONFIRMED` line in the review output so the model
+  and reasoning level are visible in the result.
+- **`access_error`** — `gpt-6-astra` was refused (HTTP 400, entitlement, or a
+  CLI too old — the message "requires a newer version of Codex" means upgrade:
+  `npm install -g @openai/codex`). This is a configuration/access failure, NOT a
+  review. Do NOT present it as a passing or failing review, and do NOT silently
+  retry with another model. Report the error and the one-line fix.
+- **`mismatch`** — a different model answered than the one pinned (something
+  overrode us). Report it as a configuration error naming both models; do not
+  present the findings as an `gpt-6-astra` review.
+- **`unconfirmed`** — no header captured (wrapper swallowed stderr). Present the
+  findings but label the model line "requested gpt-6-astra / max (unconfirmed)".
+
+
+Only once `CODEX_MODEL_GATE` is `ok` or `unconfirmed` does the review below count. Present output under `CODEX SAYS (code review):` header, with the `CODEX_REQUESTED` / `CODEX_CONFIRMED` line shown directly beneath it.
 Check for `[P1]` markers: found → `GATE: FAIL`, not found → `GATE: PASS`.
 
 If GATE is FAIL, use AskUserQuestion:

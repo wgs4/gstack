@@ -472,7 +472,23 @@ describe('codex timeout wrapper: /review + /ship diff passes', () => {
 
   // Outer Bash gate for the wrapped passes. The wrapper must be strictly
   // shorter so IT fires first and the failure is a diagnosable exit 124.
-  const BASH_GATE_MS = 600000;
+  //
+  // Derived from the prose rather than hardcoded: the gate and the wrapper are
+  // one invariant expressed in two places, and a hardcoded copy here silently
+  // went stale the moment the reviewer moved to `max` reasoning and both
+  // budgets were widened. Reading the documented gate keeps them locked
+  // together — raise the prose and this test follows it.
+  // Match ONLY the wrapped-pass gate ("Set the Bash tool's `timeout` parameter
+  // to `N`"). The unwrapped exec paths in the same generator document their own
+  // budget as "timeout: N" and have no wrapper to sit above, so folding them in
+  // here would compare a wrapper against an unrelated gate.
+  const readGateMs = (text: string): number => {
+    const hits = [...text.matchAll(/parameter to \\?`(\d+)\\?`/g)]
+      .map((m) => Number(m[1]))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (!hits.length) throw new Error('no documented Bash gate found');
+    return Math.min(...hits);
+  };
 
   for (const relPath of WRAPPED_SITES) {
     const read = () => fs.readFileSync(path.join(ROOT, relPath), 'utf8');
@@ -496,10 +512,11 @@ describe('codex timeout wrapper: /review + /ship diff passes', () => {
         (m) => Number(m[1]) * 1000,
       );
       expect(budgets.length).toBeGreaterThan(0);
+      const gateMs = readGateMs(read());
       for (const ms of budgets) {
         // Inverting this makes the wrapper unreachable: the harness kills the
         // call first and the exit-124 branch below it becomes dead code.
-        expect(ms).toBeLessThan(BASH_GATE_MS);
+        expect(ms).toBeLessThan(gateMs);
       }
     });
   }

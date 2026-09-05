@@ -335,13 +335,48 @@ THE PLAN:
 ```bash
 TMPERR_PV=$(mktemp /tmp/codex-planreview-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR_PV"
+codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only -c 'model="gpt-6-astra"' -c 'review_model="gpt-6-astra"' -c 'model_reasoning_effort="max"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR_PV"
 ```
 
-Use a 5-minute timeout (`timeout: 300000`). After the command completes, read stderr:
+Use a 20-minute timeout (`timeout: 1200000`) — the reviewer runs at `max` reasoning, which is far slower than the `high` this path used to use. After the command completes, read stderr:
 ```bash
 cat "$TMPERR_PV"
 ```
+
+```bash
+# Confirm the reviewer that actually ran is the one we pinned (requested vs confirmed).
+_CODEX_EFF_MODEL=$(grep -m1 '^model:' "$TMPERR_PV" 2>/dev/null | sed 's/^model:[[:space:]]*//')
+_CODEX_EFF_EFFORT=$(grep -m1 '^reasoning effort:' "$TMPERR_PV" 2>/dev/null | sed 's/^reasoning effort:[[:space:]]*//')
+echo "CODEX_REQUESTED: gpt-6-astra / max"
+echo "CODEX_CONFIRMED: ${_CODEX_EFF_MODEL:-unknown} / ${_CODEX_EFF_EFFORT:-unknown}"
+if grep -qiE '"status":[[:space:]]*400|requires a newer version of Codex|model.{0,40}is not supported' "$TMPERR_PV" 2>/dev/null; then
+  echo "CODEX_MODEL_GATE: access_error"
+elif [ -z "$_CODEX_EFF_MODEL" ]; then
+  echo "CODEX_MODEL_GATE: unconfirmed"
+elif [ "$_CODEX_EFF_MODEL" != "gpt-6-astra" ]; then
+  echo "CODEX_MODEL_GATE: mismatch"
+else
+  echo "CODEX_MODEL_GATE: ok"
+fi
+```
+
+Branch on `CODEX_MODEL_GATE`:
+- **`ok`** — the pinned reviewer ran. Present the findings, and include the
+  `CODEX_REQUESTED` / `CODEX_CONFIRMED` line in the review output so the model
+  and reasoning level are visible in the result.
+- **`access_error`** — `gpt-6-astra` was refused (HTTP 400, entitlement, or a
+  CLI too old — the message "requires a newer version of Codex" means upgrade:
+  `npm install -g @openai/codex`). This is a configuration/access failure, NOT a
+  review. Do NOT present it as a passing or failing review, and do NOT silently
+  retry with another model. Report the error and the one-line fix.
+- **`mismatch`** — a different model answered than the one pinned (something
+  overrode us). Report it as a configuration error naming both models; do not
+  present the findings as an `gpt-6-astra` review.
+- **`unconfirmed`** — no header captured (wrapper swallowed stderr). Present the
+  findings but label the model line "requested gpt-6-astra / max (unconfirmed)".
+
+
+If `CODEX_MODEL_GATE` is `access_error` or `mismatch`, report that configuration error instead of the review — never present it as a completed plan review.
 
 Present the full output verbatim:
 
@@ -354,7 +389,7 @@ CODEX SAYS (plan review — outside voice):
 
 **Error handling:** All errors are non-blocking — the outside voice is informational.
 - Auth failure (stderr contains "auth", "login", "unauthorized"): "Codex auth failed. Run \`codex login\` to authenticate." Fall back to the Claude subagent below.
-- Timeout: "Codex timed out after 5 minutes." Fall back to the Claude subagent below.
+- Timeout: "Codex timed out after 20 minutes." Fall back to the Claude subagent below.
 - Empty response: "Codex returned no response." Fall back to the Claude subagent below.
 
 **If `CODEX_MODE: not_installed` or `not_authed` (or Codex errored at runtime):**

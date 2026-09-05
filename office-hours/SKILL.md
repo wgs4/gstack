@@ -770,7 +770,7 @@ command -v codex >/dev/null 2>&1 && echo "CODEX_AVAILABLE" || echo "CODEX_NOT_AV
 
 Use AskUserQuestion (regardless of codex availability):
 
-> Want a second opinion from an independent AI perspective? It will review your problem statement, key answers, premises, and any landscape findings from this session without having seen this conversation — it gets a structured summary. Usually takes 2-5 minutes.
+> Want a second opinion from an independent AI perspective? It will review your problem statement, key answers, premises, and any landscape findings from this session without having seen this conversation — it gets a structured summary. Usually takes 5-15 minutes (the reviewer runs at `max` reasoning).
 > A) Yes, get a second opinion
 > B) No, proceed to alternatives
 
@@ -805,10 +805,10 @@ Then add the context block and mode-appropriate instructions:
 ```bash
 TMPERR_OH=$(mktemp /tmp/codex-oh-err-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "$(cat "$CODEX_PROMPT_FILE")" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR_OH"
+codex exec "$(cat "$CODEX_PROMPT_FILE")" -C "$_REPO_ROOT" -s read-only -c 'model="gpt-6-astra"' -c 'review_model="gpt-6-astra"' -c 'model_reasoning_effort="max"' -c 'web_search="cached"' < /dev/null 2>"$TMPERR_OH"
 ```
 
-Use a 5-minute timeout (`timeout: 300000`). After the command completes, read stderr:
+Use a 20-minute timeout (`timeout: 1200000`) — the reviewer runs at `max` reasoning, which is far slower than the `high` this path used to use. After the command completes, read stderr:
 ```bash
 cat "$TMPERR_OH"
 rm -f "$TMPERR_OH" "$CODEX_PROMPT_FILE"
@@ -816,7 +816,7 @@ rm -f "$TMPERR_OH" "$CODEX_PROMPT_FILE"
 
 **Error handling:** All errors are non-blocking — second opinion is a quality enhancement, not a prerequisite.
 - **Auth failure:** If stderr contains "auth", "login", "unauthorized", or "API key": "Codex authentication failed. Run \`codex login\` to authenticate." Fall back to Claude subagent.
-- **Timeout:** "Codex timed out after 5 minutes." Fall back to Claude subagent.
+- **Timeout:** "Codex timed out after 20 minutes." Fall back to Claude subagent.
 - **Empty response:** "Codex returned no response." Fall back to Claude subagent.
 
 On any Codex error, fall back to the Claude subagent below.

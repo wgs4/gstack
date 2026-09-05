@@ -65,6 +65,12 @@ _gstack_codex_model_probe() {
   # auth just measures the auth failure again.
   local _codex_home="${CODEX_HOME:-$HOME/.codex}"
   local _gstack_home="${GSTACK_HOME:-$HOME/.gstack}"
+  # Probe the REVIEWER model, not just the config default. gstack pins the
+  # reviewer explicitly (scripts/resolvers/constants.ts), so a config-model
+  # round trip can pass while every review still dies on a 400 -- which is
+  # exactly what a too-old CLI does ("requires a newer version of Codex").
+  # Override for local experiments with GSTACK_CODEX_REVIEWER_MODEL.
+  local _rev_model="${GSTACK_CODEX_REVIEWER_MODEL:-gpt-6-astra}"
   local _cache="$_gstack_home/.codex-model-probe"
   # Cache signature: config.toml + auth.json mtimes. Editing the model pin
   # or re-logging-in invalidates the cached MODEL_OK immediately.
@@ -78,7 +84,9 @@ _gstack_codex_model_probe() {
   _auth_m=$(stat -c %Y "$_codex_home/auth.json" 2>/dev/null || stat -f %m "$_codex_home/auth.json" 2>/dev/null || echo 0)
   case "$_cfg_m" in ''|*[!0-9]*) _cfg_m=0 ;; esac
   case "$_auth_m" in ''|*[!0-9]*) _auth_m=0 ;; esac
-  _sig="${_cfg_m}-${_auth_m}"
+  # Include the probed reviewer model in the signature: without it, changing
+  # the pin reads back a stale MODEL_OK for the *previous* model.
+  _sig="${_cfg_m}-${_auth_m}-${GSTACK_CODEX_REVIEWER_MODEL:-gpt-6-astra}"
   local _now
   _now=$(date +%s 2>/dev/null || echo 0)
   if [ -f "$_cache" ]; then
@@ -94,13 +102,14 @@ _gstack_codex_model_probe() {
     fi
     if [ "$_c_status" = "MODEL_UNUSABLE" ] && [ "$_c_sig" = "$_sig" ] && [ $((_now - _c_ts)) -lt 900 ]; then
       echo "MODEL_UNUSABLE (cached)"
-      echo "HINT: the rejected model comes from the 'model = ' line in $_codex_home/config.toml."
+      echo "HINT: rejected model: $_rev_model (gstack's pinned reviewer, or the 'model = ' line in $_codex_home/config.toml)."
+  echo "HINT: 'requires a newer version of Codex' means the CLI is too old -- run: npm install -g @openai/codex"
       echo "HINT: check its [notice.model_migrations] table — Codex records the intended replacement there."
       return 1
     fi
   fi
   local _out _code
-  _out=$(_gstack_codex_timeout_wrapper 30 codex exec --skip-git-repo-check -s read-only "reply OK" </dev/null 2>&1)
+  _out=$(_gstack_codex_timeout_wrapper 30 codex exec -m "$_rev_model" --skip-git-repo-check -s read-only "reply OK" </dev/null 2>&1)
   _code=$?
   if [ "$_code" -eq 0 ]; then
     mkdir -p "$_gstack_home" 2>/dev/null || true
@@ -113,7 +122,8 @@ _gstack_codex_model_probe() {
     printf 'MODEL_UNUSABLE %s %s\n' "$_now" "$_sig" > "$_cache" 2>/dev/null || true
     echo "MODEL_UNUSABLE"
     printf '%s\n' "$_out" | grep -i "model" | head -3
-    echo "HINT: the rejected model comes from the 'model = ' line in $_codex_home/config.toml."
+    echo "HINT: rejected model: $_rev_model (gstack's pinned reviewer, or the 'model = ' line in $_codex_home/config.toml)."
+  echo "HINT: 'requires a newer version of Codex' means the CLI is too old -- run: npm install -g @openai/codex"
     echo "HINT: check its [notice.model_migrations] table — Codex records the intended replacement there."
     _gstack_codex_log_event "codex_model_unusable" 2>/dev/null || true
     return 1
