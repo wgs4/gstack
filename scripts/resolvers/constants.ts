@@ -101,13 +101,43 @@ export const CODEX_WEB_SEARCH_FLAG = `-c 'web_search="cached"'`;
  * ONE source of truth: resolvers interpolate this directly; templates use the
  * {{CODEX_REVIEW_MODEL_FLAGS}} token. Never write these flags inline.
  *
- * Applies to REVIEW paths only. Consult mode and the design reviewers keep
- * their own tuning (speed-sensitive / different job) — see CODEX_REVIEWER_*.
+ * Every Codex path shares this model pin — review, challenge, consult, and the
+ * design voices. Reasoning effort is dialled per path (see CODEX_*_EFFORT),
+ * though all currently sit at `max`.
  */
-export const CODEX_REVIEWER_MODEL = 'gpt-6-astra';
+export const CODEX_MODEL = 'gpt-6-astra';
+
+/** Alias kept for the review paths and the model assert, which read as "reviewer". */
+export const CODEX_REVIEWER_MODEL = CODEX_MODEL;
+
+/**
+ * Per-path reasoning dials. Every Codex path now runs at `max` — quality is the
+ * priority on all of them. They stay separate constants (rather than one shared
+ * value) because they are genuinely different jobs: if consult ever needs to go
+ * back to a latency-friendly `medium`, that is a one-line change here and
+ * nothing else moves.
+ */
 export const CODEX_REVIEWER_EFFORT = 'max';
-export const CODEX_REVIEW_MODEL_FLAGS =
-  `-c 'model="${CODEX_REVIEWER_MODEL}"' -c 'review_model="${CODEX_REVIEWER_MODEL}"' -c 'model_reasoning_effort="${CODEX_REVIEWER_EFFORT}"'`;
+export const CODEX_CONSULT_EFFORT = 'max';
+export const CODEX_DESIGN_EFFORT = 'max';
+
+/**
+ * Build the model + reasoning flags for a Codex invocation.
+ *
+ * `review_model` is emitted only for review paths. It is a real config key but
+ * setting it alone does NOT switch the reviewer (verified on 0.153.4 — the
+ * session header still reported the `model` value), so it earns its place as a
+ * guard against a `review_model = ` in config.toml, not as the lever. On
+ * non-review paths it would be pure noise, so it is left off.
+ */
+export function codexModelFlags(effort: string, opts: { review?: boolean } = {}): string {
+  const reviewPin = opts.review ? ` -c 'review_model="${CODEX_MODEL}"'` : '';
+  return `-c 'model="${CODEX_MODEL}"'${reviewPin} -c 'model_reasoning_effort="${effort}"'`;
+}
+
+export const CODEX_REVIEW_MODEL_FLAGS = codexModelFlags(CODEX_REVIEWER_EFFORT, { review: true });
+export const CODEX_CONSULT_MODEL_FLAGS = codexModelFlags(CODEX_CONSULT_EFFORT);
+export const CODEX_DESIGN_MODEL_FLAGS = codexModelFlags(CODEX_DESIGN_EFFORT);
 
 /**
  * Fail-closed check that the reviewer we ASKED for is the reviewer that RAN.

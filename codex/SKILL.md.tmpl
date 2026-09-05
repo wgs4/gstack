@@ -171,7 +171,7 @@ from the `max` default — tell the user so, since `--xhigh` reads like an upgra
 Otherwise, use the per-mode defaults:
 - Review (2A): `max` — pinned reviewer, quality first
 - Challenge (2B): `max` — pinned reviewer, adversarial depth
-- Consult (2C): `medium` — large context, interactive, needs speed
+- Consult (2C): `max` — pinned, quality-first
 
 ---
 
@@ -247,8 +247,12 @@ session header still reported the `model` value). It is pinned defensively so a
 `review_model = ` line landing in `config.toml` later cannot silently select an older
 reviewer behind the skill's back.
 
-**Consult mode is NOT pinned.** It keeps the inherited default and `medium` effort — it
-is an interactive advice path where speed matters, not a reviewer.
+**Every Codex path is pinned to this model** — Review, Challenge, Consult, and the
+design voices. Reasoning effort is dialled per path via `CODEX_REVIEWER_EFFORT`,
+`CODEX_CONSULT_EFFORT` and `CODEX_DESIGN_EFFORT`; all three currently sit at `max`.
+They stay separate constants so any one path can move without disturbing the others —
+if Consult ever needs a latency-friendly `medium` again, that is a one-line change in
+`constants.ts`.
 
 If the user asks for a different model, their request wins — pass it through (see the
 flag-shape note below).
@@ -256,7 +260,7 @@ flag-shape note below).
 **Reasoning effort (per-mode defaults):**
 - **Review (2A):** `max` — pinned; review quality is the priority
 - **Challenge (2B):** `max` — pinned; adversarial depth is the whole job
-- **Consult (2C):** `medium` — large context, interactive, needs speed (unpinned)
+- **Consult (2C):** `max` — pinned; was `medium` for latency, now quality-first
 
 **Why `max` and not `ultra`.** `codex debug models` lists six levels for `gpt-6-astra`:
 low, medium, high, xhigh, max, ultra. `max` is "Maximum reasoning depth for the hardest

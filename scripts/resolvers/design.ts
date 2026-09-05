@@ -1,5 +1,5 @@
 import { type TemplateContext, toShellPath } from './types';
-import { AI_SLOP_BLACKLIST, OPENAI_HARD_REJECTIONS, OPENAI_LITMUS_CHECKS, CODEX_WEB_SEARCH_FLAG } from './constants';
+import { AI_SLOP_BLACKLIST, OPENAI_HARD_REJECTIONS, OPENAI_LITMUS_CHECKS, CODEX_WEB_SEARCH_FLAG, CODEX_DESIGN_MODEL_FLAGS, CODEX_DESIGN_EFFORT, CODEX_MODEL, codexModelFlags } from './constants';
 
 export function generateDesignReviewLite(ctx: TemplateContext): string {
   const litmusList = OPENAI_LITMUS_CHECKS.map((item, i) => `${i + 1}. ${item}`).join(' ');
@@ -18,10 +18,10 @@ If Codex is available, run a lightweight design check on the diff:
 \`\`\`bash
 TMPERR_DRL=$(mktemp /tmp/codex-drl-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "Review the git diff on this branch. Run 7 litmus checks (YES/NO each): ${litmusList} Flag any hard rejections: ${rejectionList} 5 most important design findings only. Reference file:line." -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_DRL"
+codex exec "Review the git diff on this branch. Run 7 litmus checks (YES/NO each): ${litmusList} Flag any hard rejections: ${rejectionList} 5 most important design findings only. Reference file:line." -C "$_REPO_ROOT" -s read-only ${CODEX_DESIGN_MODEL_FLAGS} ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_DRL"
 \`\`\`
 
-Use a 5-minute timeout (\`timeout: 300000\`). After the command completes, read stderr:
+Use a 20-minute timeout (\`timeout: 1200000\`) — this voice runs at \`max\` reasoning, which is far slower than the \`high\`/\`medium\` it used before. After the command completes, read stderr:
 \`\`\`bash
 cat "$TMPERR_DRL" && rm -f "$TMPERR_DRL"
 \`\`\`
@@ -523,13 +523,13 @@ If Codex is available, use AskUserQuestion:
 
 If user chooses A, launch both voices simultaneously:
 
-1. **Codex** (via Bash, \`model_reasoning_effort="medium"\`):
+1. **Codex** (via Bash, \`${CODEX_MODEL}\` at \`model_reasoning_effort="${CODEX_DESIGN_EFFORT}"\`):
 \`\`\`bash
 TMPERR_SKETCH=$(mktemp /tmp/codex-sketch-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "For this product approach, provide: a visual thesis (one sentence — mood, material, energy), a content plan (hero → support → detail → CTA), and 2 interaction ideas that change page feel. Apply beautiful defaults: composition-first, brand-first, cardless, poster not document. Be opinionated." -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="medium"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_SKETCH"
+codex exec "For this product approach, provide: a visual thesis (one sentence — mood, material, energy), a content plan (hero → support → detail → CTA), and 2 interaction ideas that change page feel. Apply beautiful defaults: composition-first, brand-first, cardless, poster not document. Be opinionated." -C "$_REPO_ROOT" -s read-only ${CODEX_DESIGN_MODEL_FLAGS} ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_SKETCH"
 \`\`\`
-Use a 5-minute timeout (\`timeout: 300000\`). After completion: \`cat "$TMPERR_SKETCH" && rm -f "$TMPERR_SKETCH"\`
+Use a 20-minute timeout (\`timeout: 1200000\`) — this voice runs at \`max\` reasoning, which is far slower than the \`high\`/\`medium\` it used before. After completion: \`cat "$TMPERR_SKETCH" && rm -f "$TMPERR_SKETCH"\`
 
 2. **Claude subagent** (via Agent tool):
 "For this product approach, what design direction would you recommend? What aesthetic, typography, and interaction patterns fit? What would make this approach feel inevitable to the user? Be specific — font names, hex colors, spacing values."
@@ -552,7 +552,9 @@ export function generateDesignOutsideVoices(ctx: TemplateContext): string {
 
   // Determine opt-in behavior and reasoning effort
   const isAutomatic = isDesignReview; // design-review runs automatically
-  const reasoningEffort = isDesignConsultation ? 'medium' : 'high'; // creative vs analytical
+  // Both creative and analytical design voices now run at the shared design
+  // dial. The creative/analytical split used to be medium-vs-high; quality won.
+  const reasoningEffort = CODEX_DESIGN_EFFORT;
 
   // Build skill-specific Codex prompt
   let codexPrompt: string;
@@ -697,9 +699,9 @@ command -v codex >/dev/null 2>&1 && echo "CODEX_AVAILABLE" || echo "CODEX_NOT_AV
 \`\`\`bash
 TMPERR_DESIGN=$(mktemp /tmp/codex-design-XXXXXXXX)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "${escapedCodexPrompt}" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="${reasoningEffort}"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_DESIGN"
+codex exec "${escapedCodexPrompt}" -C "$_REPO_ROOT" -s read-only ${codexModelFlags(reasoningEffort)} ${CODEX_WEB_SEARCH_FLAG} < /dev/null 2>"$TMPERR_DESIGN"
 \`\`\`
-Use a 5-minute timeout (\`timeout: 300000\`). After the command completes, read stderr:
+Use a 20-minute timeout (\`timeout: 1200000\`) — this voice runs at \`max\` reasoning, which is far slower than the \`high\`/\`medium\` it used before. After the command completes, read stderr:
 \`\`\`bash
 cat "$TMPERR_DESIGN" && rm -f "$TMPERR_DESIGN"
 \`\`\`
@@ -710,7 +712,7 @@ Dispatch a subagent with this prompt:
 
 **Error handling (all non-blocking):**
 - **Auth failure:** If stderr contains "auth", "login", "unauthorized", or "API key": "Codex authentication failed. Run \`codex login\` to authenticate."
-- **Timeout:** "Codex timed out after 5 minutes."
+- **Timeout:** "Codex timed out after 20 minutes."
 - **Empty response:** "Codex returned no response."
 - On any Codex error: proceed with Claude subagent output only, tagged \`[single-model]\`.
 - If Claude subagent also fails: "Outside voices unavailable — continuing with primary review."

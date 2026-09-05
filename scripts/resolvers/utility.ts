@@ -1,5 +1,5 @@
 import type { TemplateContext } from './types';
-import { CODEX_WEB_SEARCH_FLAG, CODEX_REVIEW_MODEL_FLAGS } from './constants';
+import { CODEX_WEB_SEARCH_FLAG, CODEX_REVIEW_MODEL_FLAGS, CODEX_CONSULT_MODEL_FLAGS } from './constants';
 
 /**
  * {{CODEX_WEB_SEARCH_FLAG}} — the non-deprecated codex web-search flag
@@ -18,6 +18,15 @@ export function generateCodexWebSearchFlag(_ctx: TemplateContext): string {
  */
 export function generateCodexReviewModelFlags(_ctx: TemplateContext): string {
   return CODEX_REVIEW_MODEL_FLAGS;
+}
+
+/**
+ * {{CODEX_CONSULT_MODEL_FLAGS}} — same model pin as the review paths, dialled
+ * by CODEX_CONSULT_EFFORT. Separate token so consult's reasoning level can move
+ * independently of the reviewer's without touching any template.
+ */
+export function generateCodexConsultModelFlags(_ctx: TemplateContext): string {
+  return CODEX_CONSULT_MODEL_FLAGS;
 }
 
 export function generateSlugEval(ctx: TemplateContext): string {
