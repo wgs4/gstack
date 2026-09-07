@@ -6,7 +6,7 @@ Override: every AskUserQuestion → auto-decide using the 6 principles.
 **Override rules:**
 - Mode selection: DX POLISH
 - Persona: infer from README/docs, pick the most common developer type (P6)
-- Competitive benchmark: run searches if WebSearch available, use reference benchmarks otherwise (P1)
+- Competitive benchmark: research through Aside per the loaded skill's "Web research runs in Aside" section (WebSearch when Aside is not ready); use the reference benchmarks when neither is available (P1)
 - Magical moment: pick the lowest-effort delivery vehicle that achieves the competitive tier (P5)
 - Getting started friction: always optimize toward fewer steps (P5, simpler over clever)
 - Error message quality: always require problem + cause + fix (P1, completeness)
@@ -41,7 +41,7 @@ Override: every AskUserQuestion → auto-decide using the 6 principles.
   ```
   Timeout: 10 minutes (shell-wrapper) + 12 minutes (Bash outer gate). On hang, auto-degrades this phase's Codex voice.
 
-  **Claude DX subagent** (via Agent tool):
+  **Claude DX subagent** (via Agent tool, `run_in_background: false` — same foreground contract as Phase 1):
   "Read the plan file at <plan_path>. You are an independent DX engineer
   reviewing this plan. You have NOT seen any prior review. Evaluate:
   1. Getting started: how many steps from zero to hello world? What's the TTHW?

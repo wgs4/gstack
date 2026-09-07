@@ -693,22 +693,14 @@ if [ -x "$D" ]; then
 else
   echo "DESIGN_NOT_AVAILABLE"
 fi
-B=""
-[ -n "$_ROOT" ] && [ -x "$_ROOT/.claude/skills/gstack/browse/dist/browse" ] && B="$_ROOT/.claude/skills/gstack/browse/dist/browse"
-[ -z "$B" ] && B="$HOME/.claude/skills/gstack/browse/dist/browse"
-if [ -x "$B" ]; then
-  echo "BROWSE_READY: $B"
-else
-  echo "BROWSE_NOT_AVAILABLE (will use 'open' to view comparison boards)"
-fi
 ```
 
 If `DESIGN_NOT_AVAILABLE`: skip visual mockup generation and fall back to the
 existing HTML wireframe approach (`DESIGN_SKETCH`). Design mockups are a
 progressive enhancement, not a hard requirement.
 
-If `BROWSE_NOT_AVAILABLE`: use `open file://...` instead of `$B goto` to open
-comparison boards. The user just needs to see the HTML file in any browser.
+Comparison boards are local HTML files: open them with `open file://...` on macOS
+(`xdg-open` elsewhere). The user just needs to see the file in their default browser.
 
 If `DESIGN_READY`: the design binary is available for visual mockup generation.
 Commands:
@@ -815,7 +807,7 @@ planning phase. Generating mockups during planning is the whole point.
 Allowed commands under this exception:
 - `mkdir -p ~/.gstack/projects/$SLUG/designs/...`
 - `$D generate`, `$D variants`, `$D compare`, `$D iterate`, `$D evolve`, `$D check`
-- `open` (fallback for viewing boards when `$B` is not available)
+- `open` (viewing comparison boards in the default browser)
 
 First, set up the output directory. Name it after the screen/feature being designed and today's date:
 
@@ -1027,7 +1019,7 @@ Use a 20-minute timeout (`timeout: 1200000`) — this voice runs at `max` reason
 cat "$TMPERR_DESIGN" && rm -f "$TMPERR_DESIGN"
 ```
 
-2. **Claude design subagent** (via Agent tool):
+2. **Claude design subagent** (via Agent tool, `run_in_background: false` — subagents default to background since Claude Code v2.1.198):
 Dispatch a subagent with this prompt:
 "Read the plan file at [plan-file-path]. You are an independent senior product designer reviewing this plan. You have NOT seen any prior review. Evaluate:
 

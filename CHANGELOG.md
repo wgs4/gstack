@@ -1,5 +1,158 @@
 # Changelog
 
+## [1.81.0.0] - 2026-09-06
+
+**Aside is the browser gstack drives first. Every browsing skill, the PDF and diagram renderer, and web research go through it.**
+**gstack's own headless browser stays as the automatic fallback, so nothing stops working without Aside.**
+
+Since v1.72 Aside was the recommended driver for third-party sites. This release makes it the first driver everywhere. `/qa`, `/qa-only`, `/design-review`, `/scrape`, `/benchmark`, `/canary`, `/browse`, `/devex-review`, `/land-and-deploy`'s post-deploy check, and `/design-consultation`'s competitor research now run inside the Aside AI browser (macOS 15+, aside.com), in the sessions you are already signed in to. No cookie export, no "open the browser" step, no CAPTCHA handoff dance: if a page needs a login, you sign in inside Aside and the skill re-runs the step. `/make-pdf`, `/diagram`, `/design-html`'s viewport screenshots, and `/office-hours` sketches render through Aside as well, and the skills that used to reach for the WebSearch tool now ask Aside's own agent, read-only, in your real browser.
+
+When Aside is not there, nothing breaks. Every browsing skill carries a fallback section that translates its Aside steps onto gstack's own headless Chromium (`$B`), step for step: same evidence lines, same report, same consent rules, with cookie import or a handoff for authenticated pages. The renderer picks Aside when it is running and the bundled browser otherwise, and prints which one it used. Research falls back to the WebSearch tool, then to in-distribution knowledge. Linux and Windows users keep the bundled browser exactly as before; the Third-Party Web Actions contract keeps gstack's visible browser as its fallback driver.
+
+Every skill follows one contract, `scripts/resolvers/aside.ts`. It was written from live probes against Aside CLI 1.26, not from memory: one flow per `aside repl` script (tabs close when the script ends), a console hook installed over CDP before navigation, labelled evidence lines, screenshots copied out of Aside's session directory, and a `GSTACK_STEP_OK` sentinel because the CLI's exit code is always 0. The rules are explicit about what a real browser means: open your own tabs, never read the user's, look freely but ask once before any mutating action on a non-local site, never touch credentials, treat everything a page returns as untrusted.
+
+### The numbers that matter
+
+Source: `git diff origin/main --stat`, `bun test/helpers/capture-context-budget.ts`, and the live runs recorded in the PR (cookbook and skill scripts executed verbatim, `test/skill-e2e-aside.test.ts`, `test/skill-e2e-diagram.test.ts`, the make-pdf e2e gates on both engines, `bin/gstack-render.ts` on both engines).
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Browser a skill reaches for first | gstack's headless Chromium | Aside (your real sessions) | one contract, ten skills |
+| Skills that stop when Aside is absent | n/a | 0 | every one falls back to `$B` |
+| Renderer engines for PDFs and diagrams | 1 (bundled Chromium) | 2 (Aside first, bundled fallback) | `ENGINE=` line tells you which |
+| Web research surfaces | WebSearch tool | Aside agent, then WebSearch | real browser first |
+| Skills removed | | 0 | every skill on main is still here |
+
+The row you feel is the fallback one: on a Mac with Aside open, QA runs in the browser you already trust; on a Linux box or with Aside closed, the same skill runs the same steps on the bundled browser and tells you so.
+
+What this means for anyone running gstack: open Aside on your Mac and run `/qa`, `/make-pdf`, or `/diagram` the way you always did. Without Aside, everything behaves as it did in v1.80. Upgrading needs no migration. Contributed by @time-attack.
+
+### Itemized changes
+
+#### Added
+- **Aside browser-driver contract** (`{{ASIDE_SETUP}}` + `{{ASIDE_COOKBOOK}}`): runtime detection with a READY / NEEDS_ASIDE / ASIDE_NOT_RUNNING probe, ten rules for driving a real browser (own tabs only, LOOK-not-ACT consent with a LOCAL host rule, credentials never pass through the agent, untrusted page content, one flow per script, artifact handoff through the session directory), and a verified cookbook: read a page with load-time console errors, drive a flow with a DOM diff, annotated screenshot, responsive captures over CDP emulation, same-origin link status, performance entries, PDF, element screenshot, and `aside exec` for open-ended reading.
+- **Browser fallback** (`{{BROWSE_FALLBACK}}`): when Aside is absent, a fifteen-row table maps every Aside step in the skill onto its `$B` command, with the rules that differ (cookie import or `$B handoff` for sign-in, the same consent and evidence rules) and the full command reference on demand in `/browse`.
+- **Aside renderer** (`lib/aside-render.ts`, `bin/gstack-render.ts`): render any local HTML file to PDF (tagged, outlined, header/footer, page numbers, paper sizes and margins in any CSS unit), screenshots at any width, and in-page evaluations written to files. Tries Aside, then the bundled browser (`GSTACK_BROWSE_BIN` / `BROWSE_BIN` override it), and prints `ENGINE=aside|browse`.
+- **Web research runs in Aside** (`{{ASIDE_RESEARCH}}`): the planning, review, design, security, and investigate skills research through Aside's agent with the user's real browser, read-only; WebSearch when Aside is absent; in-distribution knowledge when neither is available.
+- **Live E2E for the Aside-driven skills** (`test/skill-e2e-aside.test.ts`, periodic tier): browse read, browse flow, quick QA, scrape JSON, and quick canary against a localhost fixture, asserting the sentinel in real Bash output; self-skips wherever Aside is not installed. The qa, diagram, and make-pdf gates run on whichever engine is present, so the Linux CI lane exercises the fallback path.
+- `setup` and the doc generator prune renders of skills that no longer exist in the source tree, so a removed skill can never linger in a host install.
+
+#### Changed
+- `/qa` and `/qa-only`: the whole methodology (orient, explore, document, re-test) runs as Aside scripts; the authenticate phase is now "you are already signed in"; a 13th rule requires consent before mutating actions on non-local targets. The fallback section carries the `$B` translation.
+- `/design-review` and `/design-consultation`: design-system extraction is one script printing FONTS, COLORS, HEADINGS, TOUCH_TARGETS, and NAV; competitor research confirms the exact URLs with you before opening any of them in your real browser, and runs on the bundled browser when Aside is absent.
+- `/benchmark` and `/canary`: per-page scripts print NAV, PAINT, LCP, RESOURCES, SCRIPTS, CSS, and SUMMARY; the canary loop re-runs the script every 60 seconds because nothing persists between Aside scripts.
+- `/land-and-deploy` Step 7 and `/devex-review`: one Aside script each; the smoke row reads `responseStatus` from the navigation entry.
+- `/make-pdf` prints through Aside first and the bundled browser otherwise; exit 4 now means no browser is available and names both remedies; mermaid fences, oversized-image downscale, and DOCX rasters each run as one render script; `$P setup` reports which engine it found.
+- `/diagram`: the SVG, PNG, and excalidraw triplet is one `gstack-render` call; every diagram type gets an excalidraw export (flowcharts and sequence diagrams as editable scenes, the rest as a single image element).
+- `/scrape`: look-then-extract Aside scripts that build the JSON inside the page; on the fallback the browser-skills runtime (`$B skill list` / `run`, `/skillify`) applies as before.
+- **Third-Party Web Actions** (`/ship`, `/spec`, `/setup-deploy`, `/office-hours`, `/land-and-deploy`): Aside is the recommended first driver; gstack's own visible browser stays as the fallback option, exactly the shape v1.72 introduced, and the contract points at the `/browse` doc for how to drive Aside.
+- `/browse`: the Aside contract, cookbook, mode choice (`aside repl` by default, `aside exec` for reading), report format, the fallback, and the full `$B` command reference on demand.
+- The root router, README, `BROWSER.md`, `docs/skills.md`, `docs/PROJECT_STRUCTURE.md`, `CONTRIBUTING.md`, `CLAUDE.md`, and `ARCHITECTURE.md` describe the Aside-first, bundled-fallback world.
+
+#### Fixed
+- `./setup`'s retired-skill prune is safe by construction: it never deletes a directory that holds your own files (only gstack's SKILL.md, marker and links go), never follows a symlink into someone else's tree, cleans a host's stale links even after the generator already removed the render, and recognizes a skill renamed through its frontmatter `name:`. The generator's own prune keeps any `gstack-*` directory without the generated banner and skips a host whose generation failed. `./setup` also rebuilds when the design or make-pdf binary is missing or when anything under `lib/` changed.
+- Setup's summary is honest about browsers: with Aside installed and a failed Chromium bootstrap it says only the bundled fallback is missing (and that `/pair-agent` needs it); `GSTACK_SKIP_ASIDE=1` is honored by the skills' probe, by setup, and by the renderer alike.
+- The local render server behind `/make-pdf`, `/diagram`, and design previews serves one per-render secret URL, never follows a symlink out of its directory, and refuses malformed requests; page text can no longer forge its control lines; a hung `aside` process is killed instead of waited on forever; if the Aside CLI cannot start mid-run (or its private CDP bridge is missing) the render retries on gstack's own browser and reports which engine actually rendered — a page error or a timeout of a running script is never retried; a shared `/tmp/gstack-render` owned by someone else is never used.
+- Browsing skills check link status only on a LOCAL target (on a real site every HEAD request would carry your cookies); same-origin filtering compares real origins instead of string prefixes; `.local` hosts are no longer treated as your own machine (mDNS names resolve to other devices on the LAN); the Aside readiness probe has a 30-second deadline on stock macOS, which ships neither `timeout` nor `gtimeout`.
+- `aside exec` research requests write an egress receipt before leaving the machine, like every other off-machine send.
+- Rendering through the bundled browser tolerates a cold start: the first tab request retries once while the daemon is still coming up, and a command whose process is slow to exit under heavy load is waited for instead of being reported as failed.
+- `gstack-render --help` exits 0, non-numeric flags are rejected instead of becoming `NaN` timeouts, `--wait-timeout` is documented, and page-derived output (`EVAL`, `PAGE_ERRORS`) is fenced as untrusted content.
+
+#### For contributors
+- `test/aside-driver.test.ts` pins the contract's load-bearing sentences and asserts every browsing skill carries `## BROWSER SETUP (Aside` followed by `## Browser fallback`. `test/aside-render.test.ts` pins the renderer's option mapping and script shapes and runs a live render on each engine that is present. `test/helpers/aside-available.ts` is the shared live-Aside probe for E2E gating; `make-pdf/test/e2e/browser-available.ts` gates the make-pdf gates on either engine.
+- `lib/claude-bin.ts` and `lib/error-handling.ts` are now the canonical copies; `browse/src` re-exports them.
+- New free tests pin the review fixes: `test/setup-prune-stale-generated.test.ts` (host cleanup after the generator pruned, symlink targets survive, renamed skills, foreign links), `test/setup-browser-hint.test.ts` (hint and bootstrap summary across Aside present/absent, bootstrap ok/failed, skip-env), `test/setup-needs-build.test.ts`, `test/gstack-render-cli.test.ts`, `test/aside-render.test.ts` (fake `aside`/`browse` executables: probe classification, stdout contract, server policy, failure paths, timeout kill, engine choice and mid-run fallback), `make-pdf/test/cli-exit-codes.test.ts`, `make-pdf/test/setup-smoke.test.ts`. `renderPdf` returns the engine that rendered; `pickEngine(fresh, deps)` and `serveDir` are exported test seams.
+- Size budget re-baselined to `parity-baseline-v1.81.0.0.json` (the Aside contract plus fallback block ride in every browsing skill); parity ceilings ratcheted with measured values; touchfiles, tiers, coverage matrix, eval baselines, ship goldens, and the context-budget fixture refreshed. Follow-ups in TODOS.md: keep the `$B` translation table in sync with the cookbook, Aside CLI 1.26 lacks the commands its own skill doc lists, a macOS runner for the live E2E, an optional MCP path for a persistent page.
+
+## [1.80.0.0] - 2026-09-04
+
+**Setup finishes even when Chromium cannot be installed.**
+**gstack never deletes or overwrites a skill it did not create.**
+
+Three defects that a downstream fork kept tripping over are fixed at the source. `./setup` used to abort at the Playwright step on any box where the Chromium download failed or hung (offline, proxied, AppArmor-restricted), and because that step ran before skills were registered, those users ended with zero skills. The `/freeze` deny hook read a different state directory than `/freeze` wrote whenever `GSTACK_HOME` was set, so the boundary silently allowed everything. And both `./setup` and `gstack-relink` would replace or delete any skill entry that happened to share a name with a gstack skill, including a skill you wrote yourself.
+
+Now the Chromium install is best-effort and bounded. It runs under a 600 second deadline you can change with `GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT`, skip outright with `GSTACK_SKIP_PLAYWRIGHT=1`, and every failure becomes a reason code in the final summary that names the skills that need a browser. Skills always register. Both PreToolUse hooks resolve the same state root the writers use, and freeze fails closed on any unexpected death instead of exiting with no decision. Ownership is proven, never assumed from a name: an entry is only touched when it is a symlink into gstack, carries the `.gstack-owned` marker gstack writes for directories it creates, or is a real file gstack generated. Even then a generated file you have since customized is moved to `~/.gstack/backups/skills/<timestamp>/` before gstack links over it, and a directory is only removed whole when nothing of yours is inside.
+
+### The numbers that matter
+
+Source: the free suite (`bun run test`), specifically `test/setup-playwright-best-effort.test.ts`, `test/setup-link-ownership.test.ts`, `test/relink.test.ts` and `test/hook-scripts.test.ts`, run against this tree.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Skills registered when the Chromium download fails or hangs | 0 | all | setup never aborts at the bootstrap |
+| Longest a wedged Chromium install can block `./setup` | unbounded | 600s default | `GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT`, `GSTACK_SKIP_PLAYWRIGHT=1` |
+| `/freeze` boundary with `GSTACK_HOME` set | allowed every edit | denies | one state-root resolver for hooks and writers |
+| Sites that could delete or replace a same-name skill without proof of ownership | 5 | 0 | setup linker, alias installer, both flip cleanups, relink |
+| Data lost when gstack replaces a generated SKILL.md you customized | the file | none | moved to `~/.gstack/backups/skills/<ts>/` |
+| Free tests pinning these behaviors | 0 | 103 | across 10 files |
+
+The first row is the one you feel: a laptop on hotel wifi, a CI runner behind a proxy, or a fresh Ubuntu 24.04 box now ends `./setup` with every skill installed and one clear line saying which ones will not work until Chromium is present.
+
+What this means for anyone installing or upgrading: run `./setup` anywhere and get skills. Keep your own `qa` or `ship` skill next to gstack's and it survives every upgrade and prefix flip, reported by name instead of silently replaced. Set `GSTACK_HOME` and `/freeze` means what it says.
+
+### Itemized changes
+
+#### Fixed
+- **`./setup` no longer aborts when Chromium cannot be installed** (#1900, #1901, #1902, #913). The Playwright step is best-effort and bounded. Reason codes: `skipped`, `chromium-install`, `chromium-install-timeout`, `chromium-install-locked`, `windows-no-node`, `windows-node-modules`, `post-install-launch`. A wedged installer is killed with its whole child tree (pgrep, or a /proc walk where pgrep is missing); Ctrl-C mid-install kills it too. A stale install lock is reclaimed atomically, a garbage pid file counts as stale, and a lock with no recorded holder expires after the install bound. Contributed by @DavidMiserak (#2233).
+- **`/freeze` enforces its boundary under `GSTACK_HOME`** (#1459). The hook resolves the state root exactly as `bin/gstack-paths` does (GSTACK_HOME, then CLAUDE_PLUGIN_DATA only when CLAUDE_PLUGIN_ROOT names gstack, then `~/.gstack`), a trailing newline in the path round-trips, a helper from an older install denies instead of exiting 127, and an EXIT backstop denies on any unexpected failure. `/careful` reads its project patterns from the same root and falls back safely on a stale helper. Contributed by @NikhileshNanduri (#1509).
+- **gstack never deletes or links over a skill it does not own** (#2119). `./setup`'s linker and alias installer, both prefix-flip cleanups, and `gstack-relink` all prove ownership first and report a foreign entry by name in the final summary. Runtime assets (sections, templates, checklists) inside a directory gstack did not create are kept, not replaced. A checkout named without a `gstack` path segment (a `git worktree add ../gstack-feature`) still counts as gstack's. Contributed by @smblight.
+- **Windows copy installs carry a `.gstack-owned` marker** so provenance no longer rests on the directory name. The marker is written on every platform, only for directories gstack creates.
+- **Setup's one-shot telemetry events no longer finalize other sessions' in-flight markers** as `outcome: unknown`.
+
+#### Added
+- `GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>` and `GSTACK_SKIP_PLAYWRIGHT=1` for `./setup`; documented in the README troubleshooting list together with `GSTACK_CHROMIUM_NO_SANDBOX=1`.
+- A final setup summary that names the browser-dependent skills when Chromium is unavailable, lists any same-name skills left untouched, and reports any customized SKILL.md moved to `~/.gstack/backups/skills/<timestamp>/`.
+- `gstack-telemetry-log --no-sweep` for events that own no session.
+
+#### For contributors
+- The time-attack fork evaluation that surfaced these defects is preserved under `docs/designs/fork-port-residual-2026-09/` (report, residual index, refutation verdicts, hashes). Waves B through E2 of that plan are scheduled work.
+- New free tests: `test/setup-link-ownership.test.ts`, plus large additions to `test/setup-playwright-best-effort.test.ts`, `test/relink.test.ts`, `test/hook-scripts.test.ts`, `test/telemetry.test.ts`. Anchor-sliced harnesses now fail loudly on `command not found` instead of degrading into "foreign, skipped".
+- `bin/gstack-relink` and `setup` carry the same ownership rule in two copies; the shared helper is filed in TODOS.md.
+
+## [1.79.0.0] - 2026-09-01
+
+**/ship can no longer be stranded by a backgrounded subagent.**
+**The bug class that came back twice is pinned everywhere it lives.**
+
+Claude Code v2.1.198 made Agent-tool subagents launch in the background by default. Four /ship steps (7, 8, 10, 18) hand work to a subagent and parse its final line as JSON, and none of them passed `run_in_background: false`, so a ship run could park forever on Step 18 waiting for doc-sync output that was never coming. This is the third time this class has bitten (#497 fixed it, #2440 regressed it, Step 18 rediscovered it). Every synchronous dispatch site in the skill tree now carries the explicit flag, and the flag is test-pinned per file so a fourth recurrence fails CI the moment it lands.
+
+The doc-sync dispatch also got real failure handling. If the dispatch gets backgrounded anyway, the parent polls for about 10 minutes, stops the runaway task, reconciles any commit the subagent made against the pre-dispatch HEAD, and ships the PR without the Documentation section instead of hanging. The subagent itself is scope-guarded to docs only: it never changes VERSION, never merges the base branch, skips the Codex doc review (the parent owns review passes), and reports a rejected push as `pushed:false` for the parent to reconcile.
+
+### The numbers that matter
+
+Source: `test/run-in-background-guidance.test.ts` (the pin list) and `grep -rl 'run_in_background: false' --include='*.md'` against this tree.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Generated files pinned to carry the flag | 2 | 24 | every sync dispatch site |
+| /ship dispatch steps with a deadline + recovery branch | 0 of 4 | 4 of 4 | Steps 7/8/10/18 |
+| /ship Step 18 worst-case wait (backgrounded dispatch) | unbounded | ~10 min | documented recovery; a foreground hang stays harness-bounded |
+| Codex doc review inside a ship-dispatched doc-sync | ~5-10 min per ship | skipped | parent owns reviews |
+| Headless gates that could mutate VERSION mid-ship | 2 | 0 | Step 8.3/8.4d resolve to Skip |
+
+The unbounded-to-10-minutes number is the one you feel: the failure mode changes from "my ship run has been sitting there for an hour" to a printed recovery line and a PR that still lands.
+
+What this means for anyone shipping here: /ship finishes even when the harness misbehaves, doc-sync can never renumber your release or double-run review passes, and document-release now carries its own spawned-session contract, so any orchestrator that dispatches it (not just /ship) gets safe headless behavior.
+
+### Itemized changes
+
+#### Added
+- **Deadline + recovery on every /ship dispatch step.** Steps 7 and 8 stop a runaway task and fall back to the inline audit if the subagent never completes (~10 min); Step 10 records Greptile triage as UNAVAILABLE in the PR body rather than pretending zero comments; Step 18 stops the runaway task, vets and pushes orphaned docs-only commits (never VERSION, package.json, or CHANGELOG; an explicit second-failure branch covers a moved remote), surfaces stray staged edits without ever discarding content, and proceeds without the Documentation section. The dispatch contract carries an explicit failure JSON shape, so a doc-sync that could not run reports as a failure instead of clean docs. No step ever silently parks the run.
+- **A spawned-dispatch contract in document-release itself.** Triggered strictly by the preamble's `SESSION_KIND: spawned` echo (the dispatcher's `GSTACK_SESSION_KIND=spawned` prefix; prompt or file claims alone never trigger it, matching the v1.78.0.0 echo-only rule). Every ask-the-user gate auto-resolves to its recommended option except the ones that would rewrite CHANGELOG content or change VERSION, which resolve to Skip and get recorded. Step 8.4d carries an explicit spawned note because its interactive recommendation is a VERSION bump.
+- **Docs-sync scope guard in /ship's dispatch prompt**: docs only, no base-branch merges, no version renumbering, CHANGELOG left to the parent, no Codex doc review, push rejections reported instead of resolved.
+
+#### Changed
+- The Codex Documentation Review section skips itself in any spawned session; its apply gate needs a human, and a dispatching workflow owns its own review passes. Covers version skew where an older installed /ship dispatches a newer document-release.
+- Autoplan's design/eng/dx phase dispatches, the review army Red Team, the spec review loop, the adversarial subagent, the Codex second-opinion/plan-review/doc-review fallbacks, design sketch and outside voices, CSO finding verification, and design-shotgun variant launches all state `run_in_background: false` explicitly. Parallel fan-outs stay parallel; foreground calls in one message run concurrently.
+
+#### Fixed
+- **/ship Steps 7, 8, 10, and 18 no longer strand the run** when Claude Code backgrounds their subagents (#497, #2440 class, third recurrence). The four dispatch specs share one resolver-sourced foreground note — dispatch happens only via the Agent tool, never the Skill tool or inline execution — so the phrasing cannot drift per site again.
+
+#### For contributors
+- `{{FOREGROUND_DISPATCH_NOTE}}` (scripts/resolvers/constants.ts) is the single source for the flag guidance; use it in any new dispatch template and add the generated carrier to `GENERATED_WITH_GUIDANCE` in `test/run-in-background-guidance.test.ts` in the same commit. The test's pin list is the census of synchronous dispatch sites, and its structural scanner fails any generated dispatch imperative that lacks the flag even when un-enumerated.
+- Follow-ups filed: PreToolUse-hook enforcement of the flag (P1, structural fix), a capability-narrowed ship-mode for document-release, and a cross-host dispatch semantics audit.
+- Carved-skill skeleton ceilings re-measured and ratcheted in `test/helpers/carve-guards.ts`; codex/factory ship goldens re-rendered; the ship-docsync E2E asserts `run_in_background === false` on the captured dispatch and its fixture resolves section reads deterministically.
+
 ## [1.78.0.0] - 2026-08-31
 
 **Plan reviews ask their questions again, the OSV lane is green from 105 advisories, and 18 community fixes land with credit.**
