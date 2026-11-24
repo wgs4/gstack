@@ -671,6 +671,9 @@ function extractHookSafetyProse(tmplContent: string): string | null {
 
 // ─── Template Processing ────────────────────────────────────
 
+/** Claude-host invocation-name overrides (skill dir name → exposed name). */
+const CLAUDE_EXPOSED_NAMES: Record<string, string> = { ship: 'ship-custom' };
+
 const GENERATED_HEADER = `<!-- AUTO-GENERATED from {{SOURCE}} — do not edit directly -->\n<!-- Regenerate: bun run gen:skill-docs -->\n`;
 
 /**
@@ -898,6 +901,11 @@ function processTemplate(tmplPath: string, host: Host = 'claude'): { outputPath:
   let symlinkLoop = false;
   if (host === 'claude') {
     content = transformFrontmatter(content, host);
+    // wgs4 fork: expose some skills under a different invocation name so they
+    // don't collide with Claude Code built-ins (/ship). Only the frontmatter
+    // name changes; ctx.skillName, section paths and the directory stay put.
+    const exposed = CLAUDE_EXPOSED_NAMES[skillName];
+    if (exposed) content = content.replace(/^(---\n[\s\S]*?^name:[ \t]*)\S+/m, `$1${exposed}`);
   } else {
     const result = processExternalHost(content, tmplContent, host, skillDir, postProcessDescription, ctx, extractedName || undefined);
     content = result.content;

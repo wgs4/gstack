@@ -134,9 +134,9 @@ describe('link_claude_skill_dirs installs every runtime asset (#2317, #2454)', (
   });
 
   test('sections/ still installs for carved skills', () => {
-    expect(fs.existsSync(path.join(installDir, 'ship', 'sections'))).toBe(true);
+    expect(fs.existsSync(path.join(installDir, 'ship-custom', 'sections'))).toBe(true);
     expect(
-      fs.readdirSync(path.join(installDir, 'ship', 'sections')).length,
+      fs.readdirSync(path.join(installDir, 'ship-custom', 'sections')).length,
     ).toBeGreaterThan(0);
   });
 
